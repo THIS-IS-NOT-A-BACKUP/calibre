@@ -36,7 +36,8 @@ class wchar_raii {
 		wchar_raii() : handle(NULL) {}
 		wchar_raii(wchar_t *h) : handle(h) {}
 
-		~wchar_raii() {
+		~wchar_raii() { release(); }
+		void release() {
 			if (handle) {
 				PyMem_Free(handle);
 				handle = NULL;
@@ -44,7 +45,9 @@ class wchar_raii {
 		}
 
 		wchar_t *ptr() { return handle; }
+		wchar_t *detach() { wchar_t *ans = handle; handle = NULL; return ans; }
 		void set_ptr(wchar_t *val) { handle = val; }
+		wchar_t **address() { return &handle; }
 		explicit operator bool() const { return handle != NULL; }
 };
 
@@ -66,6 +69,8 @@ class com_wchar_raii {
 		}
 
 		wchar_t *ptr() { return handle; }
+		void set_ptr(wchar_t *val) { handle = val; }
+		wchar_t *detach() { wchar_t *ans = handle; handle = NULL; return ans; }
 		wchar_t **address() { return &handle; }
 		explicit operator bool() const { return handle != NULL; }
 };
