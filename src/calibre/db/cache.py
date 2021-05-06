@@ -15,6 +15,7 @@ import traceback
 from collections import MutableSet, Set, defaultdict
 from functools import partial, wraps
 from io import BytesIO
+from threading import Lock
 from time import time
 
 from calibre import as_unicode, isbytestring
@@ -28,7 +29,9 @@ from calibre.db.categories import get_categories
 from calibre.db.errors import NoSuchBook, NoSuchFormat
 from calibre.db.fields import IDENTITY, InvalidLinkTable, create_field
 from calibre.db.lazy import FormatMetadata, FormatsList, ProxyMetadata
-from calibre.db.locking import LockingError, DowngradeLockError, SafeReadLock, create_locks
+from calibre.db.locking import (
+    DowngradeLockError, LockingError, SafeReadLock, create_locks, try_lock
+)
 from calibre.db.search import Search
 from calibre.db.tables import VirtualTable
 from calibre.db.utils import type_safe_sort_key_function
@@ -142,7 +145,7 @@ class Cache(object):
         self.formatter_template_cache = {}
         self.dirtied_cache = {}
         self.vls_for_books_cache = None
-        self.vls_for_books_cache_is_loading = False
+        self.vls_cache_lock = Lock()
         self.dirtied_sequence = 0
         self.cover_caches = set()
         self.clear_search_cache_count = 0
@@ -252,7 +255,6 @@ class Cache(object):
         self.clear_search_cache_count += 1
         self._search_api.update_or_clear(self, book_ids)
         self.vls_for_books_cache = None
-        self.vls_for_books_cache_is_loading = False
 
     @read_api
     def last_modified(self):
@@ -2229,29 +2231,33 @@ class Cache(object):
 
     @read_api
     def virtual_libraries_for_books(self, book_ids, virtual_fields=None):
-        if self.vls_for_books_cache is None:
+        # use a primitive lock to ensure that only one thread is updating
+        # the cache and that recursive calls don't do the update. This
+        # method can recurse via self._search()
+        with try_lock(self.vls_cache_lock) as got_lock:
             # Using a list is slightly faster than a set.
             c = defaultdict(list)
-            if self.vls_for_books_cache_is_loading:
+            if not got_lock:
                 # We get here if resolving the books in a VL triggers another VL
                 # calculation. This can be 'real' recursion, in which case the
                 # eventual answer will be wrong. It can also be a  search using
                 # a location of 'all' that causes evaluation of a composite that
-                # references virtual libraries. If the composite isn't used in a
+                # references virtual_libraries(). If the composite isn't used in a
                 # VL then the eventual answer will be correct because get_metadata
                 # will clear the caches.
                 return c
-            self.vls_for_books_cache_is_loading = True
-            libraries = self._pref('virtual_libraries', {})
-            for lib, expr in libraries.items():
-                book = None
-                try:
-                    for book in self._search(expr, virtual_fields=virtual_fields):
-                        c[book].append(lib)
-                except Exception as e:
-                    if book:
-                        c[book].append(_('[Error in Virtual library {0}: {1}]').format(lib, str(e)))
-            self.vls_for_books_cache = {b:tuple(sorted(libs, key=sort_key)) for b, libs in c.items()}
+            if self.vls_for_books_cache is None:
+                self.vls_for_books_cache_is_loading = True
+                libraries = self._pref('virtual_libraries', {})
+                for lib, expr in libraries.items():
+                    book = None
+                    try:
+                        for book in self._search(expr, virtual_fields=virtual_fields):
+                            c[book].append(lib)
+                    except Exception as e:
+                        if book:
+                            c[book].append(_('[Error in Virtual library {0}: {1}]').format(lib, str(e)))
+                self.vls_for_books_cache = {b:tuple(sorted(libs, key=sort_key)) for b, libs in c.items()}
         if not book_ids:
             book_ids = self._all_book_ids()
         # book_ids is usually 1 long. The loop will be faster than a comprehension
