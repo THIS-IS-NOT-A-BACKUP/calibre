@@ -235,6 +235,60 @@ def uniq(vals):
     return tuple(x for x in vals if x not in seen and not seen_add(x))
 
 
+def get_editor_settings(tprefs):
+    dark = is_dark_theme()
+
+    def get_color(name, dark_val):
+        ans = tprefs[name]
+        if ans == 'auto' and dark:
+            ans = dark_val.name()
+        if ans in ('auto', 'unset'):
+            return None
+        return ans
+
+    return {
+        'is_dark_theme': dark,
+        'bg': get_color('preview_background', dark_color),
+        'fg': get_color('preview_foreground', dark_text_color),
+        'link': get_color('preview_link_color', dark_link_color),
+    }
+
+
+def create_dark_mode_script():
+    dark_mode_css = P('dark_mode.css', data=True, allow_user_override=False).decode('utf-8')
+    return create_script('dark-mode.js', '''
+    (function() {
+        var settings = JSON.parse(navigator.userAgent.split('|')[1]);
+        var dark_css = CSS;
+
+        function apply_body_colors(event) {
+            if (document.documentElement) {
+                if (settings.bg) document.documentElement.style.backgroundColor = settings.bg;
+                if (settings.fg) document.documentElement.style.color = settings.fg;
+            }
+            if (document.body) {
+                if (settings.bg) document.body.style.backgroundColor = settings.bg;
+                if (settings.fg) document.body.style.color = settings.fg;
+            }
+        }
+
+        function apply_css() {
+            var css = '';
+            if (settings.link) css += 'html > body :link, html > body :link * { color: ' + settings.link + ' !important; }';
+            if (settings.is_dark_theme) { css += dark_css; }
+            var style = document.createElement('style');
+            style.textContent = css;
+            document.documentElement.appendChild(style);
+            apply_body_colors();
+        }
+
+        apply_body_colors();
+        document.addEventListener("DOMContentLoaded", apply_css);
+    })();
+    '''.replace('CSS', json.dumps(dark_mode_css), 1),
+    injection_point=QWebEngineScript.InjectionPoint.DocumentCreation)
+
+
 def create_profile():
     ans = getattr(create_profile, 'ans', None)
     if ans is None:
@@ -246,42 +300,11 @@ def create_profile():
             compile_editor()
         js = P('editor.js', data=True, allow_user_override=False)
         cparser = P('csscolorparser.js', data=True, allow_user_override=False)
-        dark_mode_css = P('dark_mode.css', data=True, allow_user_override=False).decode('utf-8')
 
         insert_scripts(ans,
             create_script('csscolorparser.js', cparser),
             create_script('editor.js', js),
-            create_script('dark-mode.js', '''
-            (function() {
-                var settings = JSON.parse(navigator.userAgent.split('|')[1]);
-                var dark_css = CSS;
-
-                function apply_body_colors(event) {
-                    if (document.documentElement) {
-                        if (settings.bg) document.documentElement.style.backgroundColor = settings.bg;
-                        if (settings.fg) document.documentElement.style.color = settings.fg;
-                    }
-                    if (document.body) {
-                        if (settings.bg) document.body.style.backgroundColor = settings.bg;
-                        if (settings.fg) document.body.style.color = settings.fg;
-                    }
-                }
-
-                function apply_css() {
-                    var css = '';
-                    if (settings.link) css += 'html > body :link, html > body :link * { color: ' + settings.link + ' !important; }';
-                    if (settings.is_dark_theme) { css += dark_css; }
-                    var style = document.createElement('style');
-                    style.textContent = css;
-                    document.documentElement.appendChild(style);
-                    apply_body_colors();
-                }
-
-                apply_body_colors();
-                document.addEventListener("DOMContentLoaded", apply_css);
-            })();
-            '''.replace('CSS', json.dumps(dark_mode_css), 1),
-            injection_point=QWebEngineScript.InjectionPoint.DocumentCreation)
+            create_dark_mode_script(),
         )
         url_handler = UrlSchemeHandler(ans)
         ans.installUrlSchemeHandler(QByteArray(FAKE_PROTOCOL.encode('ascii')), url_handler)
@@ -400,22 +423,7 @@ class WebView(RestartingWebEngineView, OpenWithHandler):
         return self._size_hint
 
     def update_settings(self):
-        dark = is_dark_theme()
-
-        def get_color(name, dark_val):
-            ans = tprefs[name]
-            if ans == 'auto' and dark:
-                ans = dark_val.name()
-            if ans in ('auto', 'unset'):
-                return None
-            return ans
-
-        settings = {
-            'is_dark_theme': dark,
-            'bg': get_color('preview_background', dark_color),
-            'fg': get_color('preview_foreground', dark_text_color),
-            'link': get_color('preview_link_color', dark_link_color),
-        }
+        settings = get_editor_settings(tprefs)
         p = self._page.profile()
         ua = p.httpUserAgent().split('|')[0] + '|' + json.dumps(settings)
         p.setHttpUserAgent(ua)
