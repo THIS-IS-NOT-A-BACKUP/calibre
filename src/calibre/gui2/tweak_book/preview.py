@@ -4,17 +4,18 @@
 
 
 import json
-import textwrap
 import time
 from collections import defaultdict
 from functools import partial
 from qt.core import (
-    QApplication, QByteArray, QHBoxLayout, QIcon, QLabel, QMenu, QSize, QSizePolicy,
-    QStackedLayout, Qt, QTimer, QToolBar, QUrl, QVBoxLayout, QWidget, pyqtSignal
+    QAction, QApplication, QByteArray, QHBoxLayout, QIcon, QLabel, QMenu, QSize,
+    QSizePolicy, QStackedLayout, Qt, QTimer, QToolBar, QUrl, QVBoxLayout, QWidget,
+    pyqtSignal
 )
-from qt.webengine import QWebEngineUrlSchemeHandler, QWebEngineUrlRequestJob, QWebEngineUrlRequestInfo
 from qt.webengine import (
-    QWebEnginePage, QWebEngineProfile, QWebEngineScript, QWebEngineView, QWebEngineSettings, QWebEngineContextMenuData
+    QWebEngineContextMenuData, QWebEnginePage, QWebEngineProfile, QWebEngineScript,
+    QWebEngineSettings, QWebEngineUrlRequestInfo, QWebEngineUrlRequestJob,
+    QWebEngineUrlSchemeHandler, QWebEngineView
 )
 from threading import Thread
 
@@ -25,7 +26,8 @@ from calibre.constants import (
 from calibre.ebooks.oeb.base import OEB_DOCS, XHTML_MIME, serialize
 from calibre.ebooks.oeb.polish.parsing import parse
 from calibre.gui2 import (
-    NO_URL_FORMATTING, error_dialog, is_dark_theme, safe_open_url
+    NO_URL_FORMATTING, QT_HIDDEN_CLEAR_ACTION, error_dialog, is_dark_theme,
+    safe_open_url
 )
 from calibre.gui2.palette import dark_color, dark_link_color, dark_text_color
 from calibre.gui2.tweak_book import TOP, actions, current_container, editors, tprefs
@@ -570,6 +572,10 @@ class Preview(QWidget):
         self.current_sync_request = None
 
         self.search = HistoryLineEdit2(self)
+        self.search.setClearButtonEnabled(True)
+        ac = self.search.findChild(QAction, QT_HIDDEN_CLEAR_ACTION)
+        if ac is not None:
+            ac.triggered.connect(self.clear_clicked)
         self.search.initialize('tweak_book_preview_search')
         self.search.setPlaceholderText(_('Search in preview'))
         self.search.returnPressed.connect(self.find_next)
@@ -579,6 +585,9 @@ class Preview(QWidget):
             ac = actions['find-%s-preview' % d]
             ac.triggered.connect(getattr(self, 'find_' + d))
             self.bar.addAction(ac)
+
+    def clear_clicked(self):
+        self.view._page.findText('')
 
     def find(self, direction):
         text = unicode_type(self.search.text())
@@ -716,9 +725,9 @@ class Preview(QWidget):
             self.refresh()
 
     def split_toggled(self, checked):
-        actions['split-in-preview'].setToolTip(textwrap.fill(_(
+        actions['split-in-preview'].setToolTip('<p>' + (_(
             'Abort file split') if checked else _(
-                'Split this file at a specified location.\n\nAfter clicking this button, click'
+                'Split this file at a specified location.<p>After clicking this button, click'
                 ' inside the preview panel above at the location you want the file to be split.')))
         if checked:
             self.split_start_requested.emit()
