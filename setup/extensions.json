@@ -74,7 +74,11 @@
     {
         "name": "sqlite_extension",
         "sources": "calibre/db/sqlite_extension.cpp",
-        "inc_dirs": "!sqlite_inc_dirs"
+		"needs_c++11": true,
+        "libraries": "icudata icui18n icuuc icuio",
+        "windows_libraries": "icudt icuin icuuc icuio",
+        "lib_dirs": "!icu_lib_dirs",
+        "inc_dirs": "!icu_inc_dirs !sqlite_inc_dirs"
     },
     {
         "name": "lzx",

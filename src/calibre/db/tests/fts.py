@@ -22,8 +22,7 @@ class TestConn(Connection):
         super().__init__(':memory:')
         plugins.load_apsw_extension(self, 'sqlite_extension')
         options = []
-        if remove_diacritics:
-            options.append('remove_diacritics'), options.append('2')
+        options.append('remove_diacritics'), options.append('2' if remove_diacritics else '0')
         options = ' '.join(options)
         self.execute(f'''
 CREATE VIRTUAL TABLE fts_table USING fts5(t, tokenize = 'unicode61 {options}');
@@ -46,6 +45,12 @@ class FTSTest(BaseTest):
     def test_basic_fts(self):  # {{{
         conn = TestConn()
         conn.insert_text('two words, and a period. With another.')
-        conn.insert_text('and another')
-        self.ae(conn.term_row_counts(), {'a': 1, 'and': 2, 'another': 2, 'period': 1, 'two': 1, 'with': 1, 'words': 1})
+        conn.insert_text('and another re-init')
+        self.ae(conn.term_row_counts(), {'a': 1, 're': 1, 'init': 1, 'and': 2, 'another': 2, 'period': 1, 'two': 1, 'with': 1, 'words': 1})
+        conn = TestConn()
+        conn.insert_text('coộl')
+        self.ae(conn.term_row_counts(), {'cool': 1, 'coộl': 1})
+        conn = TestConn(remove_diacritics=False)
+        conn.insert_text('coộl')
+        self.ae(conn.term_row_counts(), {'coộl': 1})
     # }}}
