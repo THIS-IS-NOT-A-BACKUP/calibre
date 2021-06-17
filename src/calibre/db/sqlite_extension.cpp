@@ -11,16 +11,22 @@
 #include <string>
 #include <locale>
 #include <vector>
+#include <map>
+#include <cstring>
 #include <sqlite3ext.h>
 #include <unicode/unistr.h>
 #include <unicode/uchar.h>
 #include <unicode/translit.h>
 #include <unicode/errorcode.h>
+#include <unicode/brkiter.h>
+#include <unicode/uscript.h>
+#include "../utils/cpp_binding.h"
 SQLITE_EXTENSION_INIT1
 
 typedef int (*token_callback_func)(void *, int, const char *, int, int, int);
 
 
+// Converting SQLITE text to ICU strings {{{
 // UTF-8 decode taken from: https://bjoern.hoehrmann.de/utf-8/decoder/dfa/
 
 static const uint8_t utf8_data[] = {
@@ -79,14 +85,33 @@ populate_icu_string(const char *text, int text_sz, icu::UnicodeString &str, std:
     }
     byte_offsets.push_back(text_sz);
 }
+// }}}
+
+static char ui_language[16] = {0};
+
+class IteratorDescription {
+    public:
+        const char *language;
+        UScriptCode script;
+};
+
+struct char_cmp {
+    bool operator () (const char *a, const char *b) const
+    {
+        return strcmp(a,b)<0;
+    }
+};
+
 
 class Tokenizer {
 private:
-    icu::Transliterator *diacritics_remover;
+    bool remove_diacritics;
+    std::unique_ptr<icu::Transliterator> diacritics_remover;
     std::vector<int> byte_offsets;
-    std::string token_buf;
+    std::string token_buf, current_ui_language;
     token_callback_func current_callback;
     void *current_callback_ctx;
+    std::map<const char*, std::unique_ptr<icu::BreakIterator>, char_cmp> iterators;
 
     bool is_token_char(UChar32 ch) const {
         switch(u_charType(ch)) {
@@ -111,14 +136,65 @@ private:
         return current_callback(current_callback_ctx, flags, token_buf.c_str(), (int)token_buf.size(), byte_offsets[start_offset], byte_offsets[end_offset]);
     }
 
+    const char* iterator_language_for_script(UScriptCode script) const {
+        switch (script) {
+            default:
+                return "";
+            case USCRIPT_THAI:
+            case USCRIPT_LAO:
+                return "th_TH";
+            case USCRIPT_KHMER:
+                return "km_KH";
+            case USCRIPT_MYANMAR:
+                return "my_MM";
+            case USCRIPT_HIRAGANA:
+            case USCRIPT_KATAKANA:
+                return "ja_JP";
+            case USCRIPT_HANGUL:
+                return "ko_KR";
+            case USCRIPT_HAN:
+            case USCRIPT_SIMPLIFIED_HAN:
+            case USCRIPT_TRADITIONAL_HAN:
+            case USCRIPT_HAN_WITH_BOPOMOFO:
+                return "zh";
+        }
+    }
+
+    bool at_script_boundary(IteratorDescription &current, UChar32 next_codepoint) const {
+        UErrorCode err;
+        UScriptCode script = uscript_getScript(next_codepoint, &err);
+        if (script == USCRIPT_COMMON || script == USCRIPT_INVALID_CODE || script == USCRIPT_INHERITED) return false;
+        if (current.script == script) return false;
+        const char *lang = iterator_language_for_script(script);
+        if (strcmp(current.language, lang) == 0) return false;
+        current.script = script; current.language = lang;
+        return true;
+    }
+
+    void ensure_basic_iterator(void) {
+        if (current_ui_language != ui_language || iterators.find("") == iterators.end()) {
+            current_ui_language.clear(); current_ui_language = ui_language;
+            icu::ErrorCode status;
+            if (current_ui_language.empty()) {
+                iterators[""] = std::unique_ptr<icu::BreakIterator>(icu::BreakIterator::createWordInstance(icu::Locale::getDefault(), status));
+            } else {
+                iterators[""] = std::unique_ptr<icu::BreakIterator>(icu::BreakIterator::createWordInstance(icu::Locale::createCanonical(ui_language), status));
+                if (status.isFailure()) {
+                    iterators[""] = std::unique_ptr<icu::BreakIterator>(icu::BreakIterator::createWordInstance(icu::Locale::getDefault(), status));
+                }
+            }
+        }
+    }
+
 public:
     int constructor_error;
     Tokenizer(const char **args, int nargs) :
-        diacritics_remover(NULL),
-        byte_offsets(), token_buf(),
-        current_callback(NULL), current_callback_ctx(NULL), constructor_error(SQLITE_OK)
+        remove_diacritics(true), diacritics_remover(),
+        byte_offsets(), token_buf(), current_ui_language(ui_language),
+        current_callback(NULL), current_callback_ctx(NULL), iterators(),
+
+        constructor_error(SQLITE_OK)
     {
-        bool remove_diacritics = true;
         for (int i = 0; i < nargs; i++) {
             if (strcmp(args[i], "remove_diacritics") == 0) {
                 i++;
@@ -127,25 +203,23 @@ public:
         }
         if (remove_diacritics) {
             icu::ErrorCode status;
-            diacritics_remover = icu::Transliterator::createInstance("NFD; [:M:] Remove; NFC", UTRANS_FORWARD, status);
+            diacritics_remover.reset(icu::Transliterator::createInstance("NFD; [:M:] Remove; NFC", UTRANS_FORWARD, status));
             if (status.isFailure()) {
                 fprintf(stderr, "Failed to create ICU transliterator to remove diacritics with error: %s\n", status.errorName());
                 constructor_error = SQLITE_INTERNAL;
+                diacritics_remover.reset(NULL);
+                remove_diacritics = false;
             }
         }
     }
-    ~Tokenizer() {
-        if (diacritics_remover) icu::Transliterator::unregister(diacritics_remover->getID());
-        diacritics_remover = NULL;
-    }
 
     int tokenize(void *callback_ctx, int flags, const char *text, int text_sz, token_callback_func callback) {
+        ensure_basic_iterator();
         current_callback = callback; current_callback_ctx = callback_ctx;
         icu::UnicodeString str(text_sz, 0, 0);
         byte_offsets.clear();
         byte_offsets.reserve(text_sz + 8);
         populate_icu_string(text, text_sz, str, byte_offsets);
-        str.foldCase(U_FOLD_CASE_DEFAULT);
         int32_t offset = str.getChar32Start(0);
         int rc;
         bool for_query = (flags & FTS5_TOKENIZE_QUERY) != 0;
@@ -160,7 +234,7 @@ public:
                 icu::UnicodeString token(str, start_offset, offset - start_offset);
                 token.foldCase(U_FOLD_CASE_DEFAULT);
                 if ((rc = send_token(token, start_offset, offset)) != SQLITE_OK) return rc;
-                if (!for_query && diacritics_remover) {
+                if (!for_query && remove_diacritics) {
                     icu::UnicodeString tt(token);
                     diacritics_remover->transliterate(tt);
                     if (tt != token) {
@@ -250,13 +324,77 @@ calibre_sqlite_extension_init(sqlite3 *db, char **pzErrMsg, const sqlite3_api_ro
 }
 }
 
+static PyObject*
+get_locales_for_break_iteration(PyObject *self, PyObject *args) {
+    std::unique_ptr<icu::StringEnumeration> locs(icu::BreakIterator::getAvailableLocales());
+    icu::ErrorCode status;
+    pyobject_raii ans(PyList_New(0));
+    if (ans) {
+        const icu::UnicodeString *item;
+        while ((item = locs->snext(status))) {
+            std::string name;
+            item->toUTF8String(name);
+            pyobject_raii pn(PyUnicode_FromString(name.c_str()));
+            if (pn) PyList_Append(ans.ptr(), pn.ptr());
+        }
+        if (status.isFailure()) {
+            PyErr_Format(PyExc_RuntimeError, "Failed to iterate over locales with error: %s", status.errorName());
+            return NULL;
+        }
+    }
+    return ans.detach();
+}
+
+static PyObject*
+set_ui_language(PyObject *self, PyObject *args) {
+    const char *val;
+    if (!PyArg_ParseTuple(args, "s", &val)) return NULL;
+    strncpy(ui_language, val, sizeof(ui_language) - 1);
+    Py_RETURN_NONE;
+}
+
+static int
+py_callback(void *ctx, int flags, const char *text, int text_length, int start_offset, int end_offset) {
+    PyObject *ans = reinterpret_cast<PyObject*>(ctx);
+    pyobject_raii item(Py_BuildValue("{ss# si si si}", "text", text, text_length, "start", start_offset, "end", end_offset, "flags", flags));
+    if (item) PyList_Append(ans, item.ptr());
+    return SQLITE_OK;
+}
+
+static PyObject*
+tokenize(PyObject *self, PyObject *args) {
+    const char *text; int text_length, remove_diacritics = 1, flags = FTS5_TOKENIZE_DOCUMENT;
+    if (!PyArg_ParseTuple(args, "s#|pi", &text, &text_length, &remove_diacritics, &flags)) return NULL;
+    const char *targs[2] = {"remove_diacritics", "2"};
+    if (!remove_diacritics) targs[1] = "0";
+    Tokenizer t(targs, sizeof(targs)/sizeof(targs[0]));
+    pyobject_raii ans(PyList_New(0));
+    t.tokenize(ans.ptr(), flags, text, text_length, py_callback);
+    return ans.detach();
+}
 
 static PyMethodDef methods[] = {
+    {"get_locales_for_break_iteration", get_locales_for_break_iteration, METH_NOARGS,
+     "Get list of available locales for break iteration"
+    },
+    {"set_ui_language", set_ui_language, METH_VARARGS,
+     "Set the current UI language"
+    },
+    {"tokenize", tokenize, METH_VARARGS,
+     "Tokenize a string, useful for testing"
+    },
     {NULL, NULL, 0, NULL}
 };
 
 static int
-exec_module(PyObject *mod) { return 0; }
+exec_module(PyObject *mod) {
+    if (PyModule_AddIntMacro(mod, FTS5_TOKENIZE_QUERY) != 0) return 1;
+    if (PyModule_AddIntMacro(mod, FTS5_TOKENIZE_DOCUMENT) != 0) return 1;
+    if (PyModule_AddIntMacro(mod, FTS5_TOKENIZE_PREFIX) != 0) return 1;
+    if (PyModule_AddIntMacro(mod, FTS5_TOKENIZE_AUX) != 0) return 1;
+    if (PyModule_AddIntMacro(mod, FTS5_TOKEN_COLOCATED) != 0) return 1;
+    return 0;
+}
 
 static PyModuleDef_Slot slots[] = { {Py_mod_exec, (void*)exec_module}, {0, NULL} };
 

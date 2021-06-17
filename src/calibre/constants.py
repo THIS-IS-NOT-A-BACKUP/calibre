@@ -2,7 +2,7 @@
 # vim:fileencoding=utf-8
 # License: GPLv3 Copyright: 2015, Kovid Goyal <kovid at kovidgoyal.net>
 from polyglot.builtins import map, unicode_type, environ_item, hasenv, getenv
-import sys, locale, codecs, os, collections
+import sys, locale, codecs, os, collections, collections.abc
 
 __appname__   = 'calibre'
 numeric_version = (5, 21, 0)
@@ -250,6 +250,7 @@ class ExtensionsImporter:
             'matcher',
             'tokenizer',
             'certgen',
+            'sqlite_extension',
         )
         if iswindows:
             extra = ('winutil', 'wpd', 'winfonts', 'winsapi')
@@ -291,7 +292,7 @@ if iswindows:
     from calibre_extensions import winutil
 
 
-class Plugins(collections.Mapping):
+class Plugins(collections.abc.Mapping):
 
     def __iter__(self):
         from importlib.resources import contents
