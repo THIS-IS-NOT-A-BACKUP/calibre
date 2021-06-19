@@ -88,7 +88,7 @@ populate_icu_string(const char *text, int text_sz, icu::UnicodeString &str, std:
 }
 // }}}
 
-static char ui_language[16] = {0};
+static char ui_language[16] = {'e', 'n', 0};
 static std::mutex global_mutex;
 
 class IteratorDescription {
@@ -139,7 +139,7 @@ private:
     int send_token(const icu::UnicodeString &token, int32_t start_offset, int32_t end_offset, int flags = 0) {
         token_buf.clear(); token_buf.reserve(4 * token.length());
         token.toUTF8String(token_buf);
-        return current_callback(current_callback_ctx, flags, token_buf.c_str(), (int)token_buf.size(), byte_offsets[start_offset], byte_offsets[end_offset]);
+        return current_callback(current_callback_ctx, flags, token_buf.c_str(), (int)token_buf.size(), byte_offsets.at(start_offset), byte_offsets.at(end_offset));
     }
 
     const char* iterator_language_for_script(UScriptCode script) const {
@@ -276,20 +276,19 @@ public:
         IteratorDescription state;
         state.language = ""; state.script = USCRIPT_COMMON;
         int32_t start_script_block_at = offset;
-        BreakIterator &word_iterator = ensure_lang_iterator(state.language);
+        auto word_iterator = std::ref(ensure_lang_iterator(state.language));
         while (offset < str.length()) {
-            while (offset < str.length()) {
-                UChar32 ch = str.char32At(offset);
-                if (at_script_boundary(state, ch)) {
-                    if (offset > start_script_block_at) {
-                        if ((rc = tokenize_script_block(
-                            str, start_script_block_at, offset,
-                            for_query, callback, callback_ctx, word_iterator)) != SQLITE_OK) return rc;
-                    }
-                    break;
+            UChar32 ch = str.char32At(offset);
+            if (at_script_boundary(state, ch)) {
+                if (offset > start_script_block_at) {
+                    if ((rc = tokenize_script_block(
+                        str, start_script_block_at, offset,
+                        for_query, callback, callback_ctx, word_iterator)) != SQLITE_OK) return rc;
                 }
-                offset = str.moveIndex32(offset, 1);
+                start_script_block_at = offset;
+                word_iterator = ensure_lang_iterator(state.language);
             }
+            offset = str.moveIndex32(offset, 1);
         }
         if (offset > start_script_block_at) {
             rc = tokenize_script_block(str, start_script_block_at, offset, for_query, callback, callback_ctx, word_iterator);
@@ -421,6 +420,7 @@ tokenize(PyObject *self, PyObject *args) {
     if (!remove_diacritics) targs[1] = "0";
     Tokenizer t(targs, sizeof(targs)/sizeof(targs[0]));
     pyobject_raii ans(PyList_New(0));
+    if (!ans) return NULL;
     t.tokenize(ans.ptr(), flags, text, text_length, py_callback);
     return ans.detach();
 }
