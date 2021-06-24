@@ -39,8 +39,8 @@ class TestImports(unittest.TestCase):
         return count
 
     def test_import_of_all_python_modules(self):
-        exclude_modules = {'calibre.gui2.dbus_export.demo', 'calibre.gui2.dbus_export.gtk'}
         exclude_packages = {'calibre.devices.mtp.unix.upstream'}
+        exclude_modules = set()
         if not iswindows:
             exclude_modules |= {'calibre.utils.iphlpapi', 'calibre.utils.open_with.windows', 'calibre.devices.winusb'}
             exclude_packages |= {'calibre.utils.winreg', 'calibre.utils.windows'}
@@ -48,11 +48,10 @@ class TestImports(unittest.TestCase):
             exclude_modules.add('calibre.utils.open_with.osx')
         if not islinux:
             exclude_modules |= {
-                    'calibre.utils.dbus_service', 'calibre.linux',
+                    'calibre.linux',
                     'calibre.utils.linux_trash', 'calibre.utils.open_with.linux',
                     'calibre.gui2.linux_file_dialogs'
             }
-            exclude_packages.add('calibre.gui2.dbus_export')
         self.assertGreater(self.base_check(os.path.join(SRC, 'odf'), exclude_packages, exclude_modules), 10)
         base = os.path.join(SRC, 'calibre')
         self.assertGreater(self.base_check(base, exclude_packages, exclude_modules), 1000)
