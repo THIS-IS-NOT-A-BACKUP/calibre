@@ -15,7 +15,7 @@ class TheWeek(BasicNewsRecipe):
     language = 'en_IN'
     __author__ = 'Kovid Goyal'
     encoding = 'utf-8'
-    oldest_article = 15  # days
+    oldest_article = 8  # days
     max_articles_per_feed = 25
     no_stylesheets = True
     use_embedded_content = True
@@ -48,7 +48,7 @@ class TheWeek(BasicNewsRecipe):
 
     def preprocess_html(self, soup):
         a = soup.find('a')
-        a.name = 'span'
+        a.name = 'div'
         h2 = soup.find('h2')
         h2.string = fix_title(h2.string)
         return soup
