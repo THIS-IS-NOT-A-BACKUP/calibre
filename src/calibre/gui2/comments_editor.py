@@ -260,6 +260,7 @@ class EditorWidget(QTextEdit, LineEditECM):  # {{{
 
         def r(name, icon, text, checkable=False, shortcut=None):
             ac = QAction(QIcon(I(icon + '.png')), text, self)
+            ac.setShortcutContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
             if checkable:
                 ac.setCheckable(checkable)
             setattr(self, 'action_'+name, ac)
@@ -348,10 +349,10 @@ class EditorWidget(QTextEdit, LineEditECM):  # {{{
 
     def update_cursor_position_actions(self):
         c = self.textCursor()
+        tcf = c.charFormat()
         ls = c.currentList()
         self.action_ordered_list.setChecked(ls is not None and ls.format().style() == QTextListFormat.Style.ListDecimal)
         self.action_unordered_list.setChecked(ls is not None and ls.format().style() == QTextListFormat.Style.ListDisc)
-        tcf = c.charFormat()
         vert = tcf.verticalAlignment()
         self.action_superscript.setChecked(vert == QTextCharFormat.VerticalAlignment.AlignSuperScript)
         self.action_subscript.setChecked(vert == QTextCharFormat.VerticalAlignment.AlignSubScript)
@@ -397,30 +398,35 @@ class EditorWidget(QTextEdit, LineEditECM):  # {{{
             fmt.setFontWeight(
                 QFont.Weight.Bold if c.charFormat().fontWeight() != QFont.Weight.Bold else QFont.Weight.Normal)
             c.mergeCharFormat(fmt)
+        self.update_cursor_position_actions()
 
     def do_italic(self):
         with self.editing_cursor() as c:
             fmt = QTextCharFormat()
             fmt.setFontItalic(not c.charFormat().fontItalic())
             c.mergeCharFormat(fmt)
+        self.update_cursor_position_actions()
 
     def do_underline(self):
         with self.editing_cursor() as c:
             fmt = QTextCharFormat()
             fmt.setFontUnderline(not c.charFormat().fontUnderline())
             c.mergeCharFormat(fmt)
+        self.update_cursor_position_actions()
 
     def do_strikethrough(self):
         with self.editing_cursor() as c:
             fmt = QTextCharFormat()
             fmt.setFontStrikeOut(not c.charFormat().fontStrikeOut())
             c.mergeCharFormat(fmt)
+        self.update_cursor_position_actions()
 
     def do_vertical_align(self, which):
         with self.editing_cursor() as c:
             fmt = QTextCharFormat()
             fmt.setVerticalAlignment(which)
             c.mergeCharFormat(fmt)
+        self.update_cursor_position_actions()
 
     def do_superscript(self):
         self.do_vertical_align(QTextCharFormat.VerticalAlignment.AlignSuperScript)
@@ -440,6 +446,7 @@ class EditorWidget(QTextEdit, LineEditECM):  # {{{
                     ls.setFormat(lf)
             else:
                 ls = c.createList(fmt)
+        self.update_cursor_position_actions()
 
     def do_ordered_list(self):
         self.do_list(QTextListFormat.Style.ListDecimal)
@@ -453,6 +460,7 @@ class EditorWidget(QTextEdit, LineEditECM):  # {{{
             fmt = QTextBlockFormat()
             fmt.setAlignment(which)
             c.mergeBlockFormat(fmt)
+        self.update_cursor_position_actions()
 
     def do_align_left(self):
         self.do_alignment(Qt.AlignmentFlag.AlignLeft)
@@ -478,6 +486,7 @@ class EditorWidget(QTextEdit, LineEditECM):  # {{{
         with self.editing_cursor() as c:
             c.setBlockFormat(QTextBlockFormat())
             c.setCharFormat(QTextCharFormat())
+        self.update_cursor_position_actions()
 
     def do_copy(self):
         self.copy()
@@ -501,6 +510,7 @@ class EditorWidget(QTextEdit, LineEditECM):  # {{{
             bf = c.blockFormat()
             bf.setTextIndent(bf.textIndent() + 2 * self.em_size * mult)
             c.setBlockFormat(bf)
+        self.update_cursor_position_actions()
 
     def do_indent(self):
         self.indent_block()
@@ -561,6 +571,7 @@ class EditorWidget(QTextEdit, LineEditECM):  # {{{
             c.mergeBlockFormat(bf)
             if pos is not None:
                 c.setPosition(pos)
+        self.update_cursor_position_actions()
 
     def do_color(self):
         col = QColorDialog.getColor(Qt.GlobalColor.black, self,
