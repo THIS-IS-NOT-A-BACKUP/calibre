@@ -11,17 +11,17 @@ from qt.core import (
 
 from calibre import prepare_string_for_xml
 from calibre.ebooks.html_transform_rules import (
-    ACTION_MAP, MATCH_TYPE_MAP, compile_rules, export_rules, import_rules,
+    ACTION_MAP, MATCH_TYPE_MAP, export_rules, import_rules,
     validate_rule
 )
 from calibre.gui2 import choose_files, choose_save_file, elided_text, error_dialog
+from calibre.gui2.convert.xpath_wizard import XPathEdit
 from calibre.gui2.tag_mapper import (
     RuleEditDialog as RuleEditDialogBase, RuleItem as RuleItemBase,
     Rules as RulesBase, RulesDialog as RulesDialogBase, SaveLoadMixin
 )
 from calibre.gui2.widgets2 import Dialog
 from calibre.utils.config import JSONConfig
-from calibre.utils.localization import localize_user_manual_link
 
 
 class TagAction(QWidget):
@@ -138,6 +138,44 @@ class ActionsContainer(QScrollArea):
             self.new_action().as_dict = entry
 
 
+class GenericEdit(QLineEdit):
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setClearButtonEnabled(True)
+
+    @property
+    def value(self):
+        return self.text()
+
+    @value.setter
+    def value(self, val):
+        self.setText(str(val))
+
+
+class CSSEdit(QWidget):
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        l = QHBoxLayout(self)
+        l.setContentsMargins(0, 0, 0, 0)
+        self.edit = le = GenericEdit(self)
+        l.addWidget(le)
+        l.addSpacing(5)
+        self.la = la = QLabel(_('<a href="{}">CSS selector help</a>').format('https://developer.mozilla.org/en-US/docs/Learn/CSS/Building_blocks/Selectors'))
+        la.setOpenExternalLinks(True)
+        l.addWidget(la)
+        self.setPlaceholderText = self.edit.setPlaceholderText
+
+    @property
+    def value(self):
+        return self.edit.value
+
+    @value.setter
+    def value(self, val):
+        self.edit.value = val
+
+
 class RuleEdit(QWidget):  # {{{
 
     MSG = _('Create the rule to transform HTML tags below')
@@ -152,7 +190,7 @@ class RuleEdit(QWidget):  # {{{
         l.addWidget(la)
         l.addLayout(h)
         english_sentence = '{preamble} {match_type}'
-        sentence = _('{preamble} {match_type} {query}')
+        sentence = _('{preamble} {match_type}')
         if set(sentence.split()) != set(english_sentence.split()):
             sentence = english_sentence
         parts = sentence.split()
@@ -168,15 +206,10 @@ class RuleEdit(QWidget):  # {{{
             if clause is not parts[-1]:
                 h.addWidget(QLabel('\xa0'))
         h.addStretch(1)
-        self.hl = h = QHBoxLayout()
-        l.addLayout(h)
-        self.query = q = QLineEdit(self)
-        q.setClearButtonEnabled(True)
-        h.addWidget(q)
-        h.addSpacing(20)
-        self.query_help_label = la = QLabel(self)
-        la.setOpenExternalLinks(True)
-        h.addWidget(la)
+        self.generic_query = gq = GenericEdit(self)
+        self.css_query = cq = CSSEdit(self)
+        self.xpath_query = xq = XPathEdit(self, object_name='html_transform_rules_xpath', show_msg=False)
+        l.addWidget(gq), l.addWidget(cq), l.addWidget(xq)
 
         self.thenl = QLabel(_('Then:'))
         l.addWidget(self.thenl)
@@ -193,28 +226,29 @@ class RuleEdit(QWidget):  # {{{
         a.setWidth(a.width() + 125)
         return a
 
+    @property
+    def current_query_widget(self):
+        return {'css': self.css_query, 'xpath': self.xpath_query}.get(self.match_type.currentData(), self.generic_query)
+
     def update_state(self):
         r = self.rule
         mt = r['match_type']
-        self.query.setVisible(mt != '*')
-        self.query.setPlaceholderText(MATCH_TYPE_MAP[mt].placeholder)
-        self.query_help_label.setVisible(mt in ('css', 'xpath'))
-        if self.query_help_label.isVisible():
-            if mt == 'css':
-                url = 'https://developer.mozilla.org/en-US/docs/Learn/CSS/Building_blocks/Selectors'
-                text = _('CSS Selector help')
-            else:
-                url = localize_user_manual_link('https://manual.calibre-ebook.com/xpath.html')
-                text = _('XPath selector help')
-            self.query_help_label.setText(f'<a href="{url}">{text}</a>')
+        self.generic_query.setVisible(False), self.css_query.setVisible(False), self.xpath_query.setVisible(False)
+        self.current_query_widget.setVisible(True)
+        self.current_query_widget.setPlaceholderText(MATCH_TYPE_MAP[mt].placeholder)
 
     @property
     def rule(self):
-        return {
-            'match_type': self.match_type.currentData(),
-            'query': self.query.text().strip(),
-            'actions': self.actions.as_list,
-        }
+        try:
+            return {
+                'match_type': self.match_type.currentData(),
+                'query': self.current_query_widget.value,
+                'actions': self.actions.as_list,
+            }
+        except Exception:
+            import traceback
+            traceback.print_exc()
+            raise
 
     @rule.setter
     def rule(self, rule):
@@ -222,7 +256,7 @@ class RuleEdit(QWidget):  # {{{
             c = getattr(self, name)
             c.setCurrentIndex(max(0, c.findData(str(rule.get(name, '')))))
         sc('match_type')
-        self.query.setText(str(rule.get('query', '')).strip())
+        self.current_query_widget.value = str(rule.get('query', '')).strip()
         self.actions.as_list = rule.get('actions') or []
         self.update_state()
 
@@ -270,19 +304,19 @@ class Rules(RulesBase):  # {{{
     RuleItemClass = RuleItem
     RuleEditDialogClass = RuleEditDialog
     ACTION_KEY = 'actions'
-    MSG = _('You can specify rules to transform styles here. Click the "Add rule" button'
+    MSG = _('You can specify rules to transform HTML here. Click the "Add rule" button'
             ' below to get started.')
 # }}}
 
 
 class Tester(Dialog):  # {{{
 
-    DIALOG_TITLE = _('Test style transform rules')
-    PREFS_NAME = 'test-style-transform-rules'
-    LABEL = _('Enter a CSS stylesheet below to test')
+    DIALOG_TITLE = _('Test HTML transform rules')
+    PREFS_NAME = 'test-html-transform-rules'
+    LABEL = _('Enter an HTML document below to test')
 
     def __init__(self, rules, parent=None):
-        self.rules = compile_rules(rules)
+        self.rules = rules
         Dialog.__init__(self, self.DIALOG_TITLE, self.PREFS_NAME, parent=parent)
 
     def setup_ui(self):
@@ -292,7 +326,7 @@ class Tester(Dialog):  # {{{
         self.la = la = QLabel(self.LABEL)
         l.addWidget(la)
         self.css = t = TextEdit(self)
-        t.load_text('/* %s */\n' % _('Enter CSS rules below and click the "Test" button'), 'css')
+        t.load_text('<!-- %s -->\n' % _('Enter the HTML below and click the "Test" button'), 'html')
         la.setBuddy(t)
         c = t.textCursor()
         c.movePosition(QTextCursor.MoveOperation.End)
@@ -322,15 +356,15 @@ class Tester(Dialog):  # {{{
 
 class RulesDialog(RulesDialogBase):  # {{{
 
-    DIALOG_TITLE = _('Edit style transform rules')
-    PREFS_NAME = 'edit-style-transform-rules'
+    DIALOG_TITLE = _('Edit HTML transform rules')
+    PREFS_NAME = 'edit-html-transform-rules'
     RulesClass = Rules
     TesterClass = Tester
 
     def __init__(self, *args, **kw):
         # This has to be loaded on instantiation as it can be shared by
         # multiple processes
-        self.PREFS_OBJECT = JSONConfig('style-transform-rules')
+        self.PREFS_OBJECT = JSONConfig('html-transform-rules')
         RulesDialogBase.__init__(self, *args, **kw)
 # }}}
 
@@ -342,7 +376,7 @@ class RulesWidget(QWidget, SaveLoadMixin):  # {{{
     def __init__(self, parent=None):
         self.loaded_ruleset = None
         QWidget.__init__(self, parent)
-        self.PREFS_OBJECT = JSONConfig('style-transform-rules')
+        self.PREFS_OBJECT = JSONConfig('html-transform-rules')
         l = QVBoxLayout(self)
         self.rules_widget = w = Rules(self)
         w.changed.connect(self.changed.emit)
@@ -378,14 +412,14 @@ class RulesWidget(QWidget, SaveLoadMixin):  # {{{
         if not rules:
             return error_dialog(self, _('No rules'), _(
                 'There are no rules to export'), show=True)
-        path = choose_save_file(self, 'export-style-transform-rules', _('Choose file for exported rules'), initial_filename='rules.txt')
+        path = choose_save_file(self, 'export-html-transform-rules', _('Choose file for exported rules'), initial_filename='html-rules.json')
         if path:
             raw = export_rules(rules)
             with open(path, 'wb') as f:
                 f.write(raw)
 
     def import_rules(self):
-        paths = choose_files(self, 'export-style-transform-rules', _('Choose file to import rules from'), select_only_single_file=True)
+        paths = choose_files(self, 'export-html-transform-rules', _('Choose file to import rules from'), select_only_single_file=True)
         if paths:
             with open(paths[0], 'rb') as f:
                 rules = import_rules(f.read())
@@ -419,7 +453,7 @@ if __name__ == '__main__':
     app = Application([])
     d = RulesDialog()
     d.rules = [
-        {'match_type':'*', 'query':'', 'actions':[{'type': 'remove'}]},
+        {'match_type':'xpath', 'query':'//h:h2', 'actions':[{'type': 'remove'}]},
     ]
     d.exec_()
     from pprint import pprint
