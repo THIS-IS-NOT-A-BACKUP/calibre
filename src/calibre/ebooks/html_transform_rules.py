@@ -3,6 +3,7 @@
 # License: GPLv3 Copyright: 2016, Kovid Goyal <kovid at kovidgoyal.net>
 
 
+import re
 from functools import partial
 from html5_parser import parse
 from lxml import etree
@@ -10,7 +11,6 @@ from lxml import etree
 from calibre.ebooks.oeb.parse_utils import XHTML
 from calibre.ebooks.oeb.base import OEB_DOCS, XPath
 from calibre.ebooks.metadata.tag_mapper import uniq
-from calibre.utils.serialize import json_dumps, json_loads
 from css_selectors.select import Select, get_parsed_selector
 
 
@@ -39,15 +39,15 @@ ACTION_MAP = {a.name: a for a in (
     Action('rename', _('Change tag name'), _('Rename tag to the specified name'), _('New tag name')),
     Action('remove', _('Remove tag and children'), _('Remove the tag and all its contents')),
     Action('unwrap', _('Remove tag only'), _('Remove the tag but keep its contents')),
-    Action('add_classes', _('Add classes'), _('Add the specified classes, for e.g.:') + ' bold green', _('Space separated class names')),
-    Action('remove_classes', _('Remove classes'), _('Remove the specified classes, for e.g:') + ' bold green', _('Space separated class names')),
+    Action('add_classes', _('Add classes'), _('Add the specified classes, e.g.:') + ' bold green', _('Space separated class names')),
+    Action('remove_classes', _('Remove classes'), _('Remove the specified classes, e.g.:') + ' bold green', _('Space separated class names')),
     Action('remove_attrs', _('Remove attributes'), _(
         'Remove the specified attributes from the tag. Multiple attribute names should be separated by spaces.'
         ' The special value * removes all attributes.'), _('Space separated attribute names')),
-    Action('add_attrs', _('Add attributes'), _('Add the specified attributes, for e.g.:') + ' class="red" name="test"', _('Space separated attribute names')),
+    Action('add_attrs', _('Add attributes'), _('Add the specified attributes, e.g.:') + ' class="red" name="test"', _('Space separated attribute names')),
     Action('empty', _('Empty the tag'), _('Remove all contents from the tag')),
     Action('wrap', _('Wrap the tag'), _(
-        'Wrap the tag in the specified tag, for example: {0} will wrap the tag in a DIV tag with class {1}').format(
+        'Wrap the tag in the specified tag, e.g.: {0} will wrap the tag in a DIV tag with class {1}').format(
             '&lt;div class="box"&gt;', 'box'), _('An HTML opening tag')),
     Action('insert', _('Insert HTML at start'), _(
         'The specified HTML snippet is inserted after the opening tag. Note that only valid HTML snippets can be used without unclosed tags'),
@@ -103,6 +103,7 @@ MATCH_TYPE_MAP = {m.name: m for m in (
     Match('css', _('matches CSS selector'), _('CSS selector'), validate_css_selector),
     Match('xpath', _('matches XPath selector'), _('XPath selector'), validate_xpath_selector),
     Match('*', _('is any tag')),
+    Match('contains_text', _('contains text'), _('Text')),
 )}
 allowed_keys = frozenset('match_type query actions'.split())
 
@@ -129,7 +130,7 @@ def validate_rule(rule):
     if err:
         return _('Invalid {}').format(m.placeholder), err
     if not rule['actions']:
-        return _('No actions'), _('The rules has no actions')
+        return _('No actions'), _('The rule has no actions')
     for action in rule['actions']:
         err = validate_action(action)
         if err:
@@ -339,6 +340,24 @@ def create_action(serialized_action):
     return action_map[serialized_action['type']](serialized_action.get('data', ''))
 
 
+def text_as_xpath_literal(text):
+    if '"' in text:
+        if "'" not in text:
+            return f"'{text}'"
+        parts = []
+        for x in re.split(r'(")', text):
+            if not x:
+                continue
+            if x == '"':
+                x = "'\"'"
+            else:
+                x = f'"{x}"'
+            parts.append(x)
+        return f'concat({",".join(parts)})'
+
+    return f'"{text}"'
+
+
 class Rule:
 
     def __init__(self, serialized_rule):
@@ -360,6 +379,9 @@ class Rule:
         elif mt == 'not_has_class':
             self.css_selector = f":not(.{q})"
             self.selector = self.css
+        elif mt == 'contains_text':
+            self.xpath_selector = XPath(f'//*[contains(text(), {text_as_xpath_literal(q)})]')
+            self.selector = self.xpath
         else:
             raise KeyError(f'Unknown match_type: {mt}')
         self.actions = tuple(map(create_action, serialized_rule['actions']))
@@ -387,6 +409,13 @@ def transform_doc(root, rules):
     return changed
 
 
+def transform_html(html, serialized_rules):
+    root = parse(html, namespace_elements=True)
+    rules = tuple(Rule(r) for r in serialized_rules)
+    changed = transform_doc(root, rules)
+    return changed, etree.tostring(root, encoding='unicode')
+
+
 def transform_container(container, serialized_rules, names=()):
     if not names:
         types = OEB_DOCS
@@ -409,6 +438,15 @@ def transform_container(container, serialized_rules, names=()):
     return doc_changed
 
 
+def transform_conversion_book(oeb, opts, serialized_rules):
+    rules = tuple(Rule(r) for r in serialized_rules)
+    for item in oeb.spine:
+        root = item.data
+        if not hasattr(root, 'xpath'):
+            continue
+        transform_doc(root, rules)
+
+
 def rule_to_text(rule):
     text = _('If the tag {match_type} {query}').format(
         match_type=MATCH_TYPE_MAP[rule['match_type']].text, query=rule.get('query') or '')
@@ -420,14 +458,41 @@ def rule_to_text(rule):
 
 
 def export_rules(serialized_rules):
-    return json_dumps({'version': 1, 'type': 'html_transform_rules', 'rules': serialized_rules}, indent=2, sort_keys=True)
+    lines = []
+    for rule in serialized_rules:
+        lines.extend('# ' + l for l in rule_to_text(rule).splitlines())
+        lines.extend('%s: %s' % (k, v.replace('\n', ' ')) for k, v in rule.items() if k in allowed_keys and k != 'actions')
+        for action in rule.get('actions', ()):
+            lines.append(f"action: {action['type']}: {action.get('data', '')}")
+        lines.append('')
+    return '\n'.join(lines).encode('utf-8')
 
 
 def import_rules(raw_data):
-    d = json_loads(raw_data)
-    if d.get('version') == 1 and d.get('type') == 'html_transform_rules':
-        return d['rules']
-    return []
+    current_rule = {}
+
+    def sanitize(r):
+        return {k:(r.get(k) or '') for k in allowed_keys}
+
+    for line in raw_data.decode('utf-8').splitlines():
+        if not line.strip():
+            if current_rule:
+                yield sanitize(current_rule)
+            current_rule = {}
+            continue
+        if line.lstrip().startswith('#'):
+            continue
+        parts = line.split(':', 1)
+        if len(parts) == 2:
+            k, v = parts[0].lower().strip(), parts[1].strip()
+            if k == 'action':
+                actions = current_rule.setdefault('actions', [])
+                parts = v.split(':', 1)
+                actions.append({'type': parts[0].strip(), 'data': parts[1].strip() if len(parts) == 2 else ''})
+            elif k in allowed_keys:
+                current_rule[k] = v
+    if current_rule:
+        yield sanitize(current_rule)
 
 
 def test(return_tests=False):  # {{{
@@ -443,8 +508,8 @@ def test(return_tests=False):  # {{{
 <html id='root'>
 <head id='head'></head>
 <body id='body'>
-<p class="one red" id='p1'>
-<p class="two green" id='p2'>
+<p class="one red" id='p1'>simple
+<p class="two green" id='p2'>a'b"c
 ''')
             all_ids = root.xpath('//*/@id')
 
@@ -467,6 +532,8 @@ def test(return_tests=False):  # {{{
             t('not_has_class', 'one', ei)
             t('css', '#body > p.red', ['p1'])
             t('xpath', '//h:body', ['body'])
+            t('contains_text', 'imple', ['p1'])
+            t('contains_text', 'a\'b"c', ['p2'])
 
         def test_validate_rule(self):
             def av(match_type='*', query='', atype='remove', adata=''):
@@ -485,8 +552,11 @@ def test(return_tests=False):  # {{{
             ai(atype='wrap')
 
         def test_export_import(self):
-            rule = {'property':'a', 'match_type':'*', 'query':'some text', 'action':'remove', 'action_data':'color: red; a: b'}
+            rule = {'match_type': 'is', 'query': 'p', 'actions': [{'type': 'rename', 'data': 'div'}, {'type': 'remove', 'data': ''}]}
             self.ae(rule, next(iter(import_rules(export_rules([rule])))))
+            rule = {'match_type': '*', 'actions': [{'type': 'remove'}]}
+            erule = {'match_type': '*', 'query': '', 'actions': [{'type': 'remove', 'data': ''}]}
+            self.ae(erule, next(iter(import_rules(export_rules([rule])))))
 
         def test_html_transform_actions(self):
             try:

@@ -4,24 +4,26 @@
 
 
 from qt.core import (
-    QComboBox, QDialogButtonBox, QFrame, QHBoxLayout, QIcon, QLabel, QLineEdit,
-    QMenu, QPushButton, QScrollArea, QSize, Qt, QTextCursor, QToolButton,
-    QVBoxLayout, QWidget, pyqtSignal
+    QComboBox, QFrame, QHBoxLayout, QIcon, QLabel, QLineEdit, QPushButton,
+    QScrollArea, Qt, QToolButton, QVBoxLayout, QWidget, pyqtSignal
 )
 
 from calibre import prepare_string_for_xml
 from calibre.ebooks.html_transform_rules import (
-    ACTION_MAP, MATCH_TYPE_MAP, export_rules, import_rules,
+    ACTION_MAP, MATCH_TYPE_MAP, export_rules, import_rules, transform_html,
     validate_rule
 )
-from calibre.gui2 import choose_files, choose_save_file, elided_text, error_dialog
+from calibre.gui2 import elided_text, error_dialog
 from calibre.gui2.convert.xpath_wizard import XPathEdit
+from calibre.gui2.css_transform_rules import (
+    RulesWidget as RulesWidgetBase, Tester as TesterBase
+)
 from calibre.gui2.tag_mapper import (
     RuleEditDialog as RuleEditDialogBase, RuleItem as RuleItemBase,
-    Rules as RulesBase, RulesDialog as RulesDialogBase, SaveLoadMixin
+    Rules as RulesBase, RulesDialog as RulesDialogBase
 )
-from calibre.gui2.widgets2 import Dialog
-from calibre.utils.config import JSONConfig
+
+# Classes for rule edit widget {{{
 
 
 class TagAction(QWidget):
@@ -174,6 +176,7 @@ class CSSEdit(QWidget):
     @value.setter
     def value(self, val):
         self.edit.value = val
+# }}}
 
 
 class RuleEdit(QWidget):  # {{{
@@ -272,7 +275,7 @@ class RuleEdit(QWidget):  # {{{
 
 class RuleEditDialog(RuleEditDialogBase):  # {{{
 
-    PREFS_NAME = 'edit-css-transform-rule'
+    PREFS_NAME = 'edit-html-transform-rule'
     DIALOG_TITLE = _('Edit rule')
     RuleEditClass = RuleEdit
 # }}}
@@ -290,7 +293,7 @@ class RuleItem(RuleItemBase):  # {{{
                 text += '<br>' + ACTION_MAP[action['type']].short_text
                 if action.get('data'):
                     ad = elided_text(action['data'], font=parent.font(), width=200, pos='right')
-                    text += f'<code>{prepare_string_for_xml(ad)}</code>'
+                    text += f' <code>{prepare_string_for_xml(ad)}</code>'
         except Exception:
             import traceback
             traceback.print_exc()
@@ -309,48 +312,20 @@ class Rules(RulesBase):  # {{{
 # }}}
 
 
-class Tester(Dialog):  # {{{
+class Tester(TesterBase):  # {{{
 
     DIALOG_TITLE = _('Test HTML transform rules')
     PREFS_NAME = 'test-html-transform-rules'
-    LABEL = _('Enter an HTML document below to test')
+    LABEL = _('Enter an HTML document below and click the "Test" button')
+    SYNTAX = 'html'
+    RESULTS = '<!-- %s -->\n\n' % _('Resulting HTML')
 
-    def __init__(self, rules, parent=None):
-        self.rules = rules
-        Dialog.__init__(self, self.DIALOG_TITLE, self.PREFS_NAME, parent=parent)
-
-    def setup_ui(self):
-        from calibre.gui2.tweak_book.editor.text import TextEdit
-        self.l = l = QVBoxLayout(self)
-        self.bb.setStandardButtons(QDialogButtonBox.StandardButton.Close)
-        self.la = la = QLabel(self.LABEL)
-        l.addWidget(la)
-        self.css = t = TextEdit(self)
-        t.load_text('<!-- %s -->\n' % _('Enter the HTML below and click the "Test" button'), 'html')
-        la.setBuddy(t)
-        c = t.textCursor()
-        c.movePosition(QTextCursor.MoveOperation.End)
-        t.setTextCursor(c)
-        self.h = h = QHBoxLayout()
-        l.addLayout(h)
-        h.addWidget(t)
-        self.test_button = b = QPushButton(_('&Test'), self)
-        b.clicked.connect(self.do_test)
-        h.addWidget(b)
-        self.result = la = TextEdit(self)
-        la.setReadOnly(True)
-        l.addWidget(la)
-        l.addWidget(self.bb)
-
-    @property
-    def value(self):
-        return self.css.toPlainText()
+    def compile_rules(self, rules):
+        return rules
 
     def do_test(self):
-        raise NotImplementedError('TODO: Implement this')
-
-    def sizeHint(self):
-        return QSize(800, 600)
+        changed, html = transform_html('\n' + self.value + '\n', self.rules)
+        self.set_result(html)
 # }}}
 
 
@@ -358,93 +333,38 @@ class RulesDialog(RulesDialogBase):  # {{{
 
     DIALOG_TITLE = _('Edit HTML transform rules')
     PREFS_NAME = 'edit-html-transform-rules'
+    PREFS_OBJECT_NAME = 'html-transform-rules'
     RulesClass = Rules
     TesterClass = Tester
 
-    def __init__(self, *args, **kw):
-        # This has to be loaded on instantiation as it can be shared by
-        # multiple processes
-        self.PREFS_OBJECT = JSONConfig('html-transform-rules')
-        RulesDialogBase.__init__(self, *args, **kw)
+    def extra_bottom_widget(self):
+        self.scope_cb = cb = QComboBox()
+        cb.addItem(_('Current HTML file'), 'current')
+        cb.addItem(_('All HTML files'), 'all')
+        cb.addItem(_('Open HTML files'), 'open')
+        cb.addItem(_('Selected HTML files'), 'selected')
+        return cb
+
+    @property
+    def transform_scope(self):
+        return self.scope_cb.currentData()
+
+    @transform_scope.setter
+    def transform_scope(self, val):
+        idx = self.scope_cb.findData(val)
+        self.scope_cb.setCurrentIndex(max(0, idx))
+
 # }}}
 
 
-class RulesWidget(QWidget, SaveLoadMixin):  # {{{
-
-    changed = pyqtSignal()
-
-    def __init__(self, parent=None):
-        self.loaded_ruleset = None
-        QWidget.__init__(self, parent)
-        self.PREFS_OBJECT = JSONConfig('html-transform-rules')
-        l = QVBoxLayout(self)
-        self.rules_widget = w = Rules(self)
-        w.changed.connect(self.changed.emit)
-        l.addWidget(w)
-        self.h = h = QHBoxLayout()
-        l.addLayout(h)
-        self.export_button = b = QPushButton(_('E&xport'), self)
-        b.setToolTip(_('Export these rules to a file'))
-        b.clicked.connect(self.export_rules)
-        h.addWidget(b)
-        self.import_button = b = QPushButton(_('&Import'), self)
-        b.setToolTip(_('Import previously exported rules'))
-        b.clicked.connect(self.import_rules)
-        h.addWidget(b)
-        self.test_button = b = QPushButton(_('&Test rules'), self)
-        b.clicked.connect(self.test_rules)
-        h.addWidget(b)
-        h.addStretch(10)
-        self.save_button = b = QPushButton(_('&Save'), self)
-        b.setToolTip(_('Save this ruleset for later re-use'))
-        b.clicked.connect(self.save_ruleset)
-        h.addWidget(b)
-        self.export_button = b = QPushButton(_('&Load'), self)
-        self.load_menu = QMenu(self)
-        b.setMenu(self.load_menu)
-        b.setToolTip(_('Load a previously saved ruleset'))
-        b.clicked.connect(self.load_ruleset)
-        h.addWidget(b)
-        self.build_load_menu()
-
-    def export_rules(self):
-        rules = self.rules_widget.rules
-        if not rules:
-            return error_dialog(self, _('No rules'), _(
-                'There are no rules to export'), show=True)
-        path = choose_save_file(self, 'export-html-transform-rules', _('Choose file for exported rules'), initial_filename='html-rules.json')
-        if path:
-            raw = export_rules(rules)
-            with open(path, 'wb') as f:
-                f.write(raw)
-
-    def import_rules(self):
-        paths = choose_files(self, 'export-html-transform-rules', _('Choose file to import rules from'), select_only_single_file=True)
-        if paths:
-            with open(paths[0], 'rb') as f:
-                rules = import_rules(f.read())
-            self.rules_widget.rules = list(rules) + list(self.rules_widget.rules)
-            self.changed.emit()
-
-    def load_ruleset(self, name):
-        SaveLoadMixin.load_ruleset(self, name)
-        self.changed.emit()
-
-    def test_rules(self):
-        Tester(self.rules_widget.rules, self).exec_()
-
-    @property
-    def rules(self):
-        return self.rules_widget.rules
-
-    @rules.setter
-    def rules(self, val):
-        try:
-            self.rules_widget.rules = val or []
-        except Exception:
-            import traceback
-            traceback.print_exc()
-            self.rules_widget.rules = []
+class HtmlRulesWidget(RulesWidgetBase):  # {{{
+    PREFS_NAME = 'html-transform-rules'
+    INITIAL_FILE_NAME = 'html-rules.txt'
+    DIR_SAVE_NAME = 'export-html-transform-rules'
+    export_func = export_rules
+    import_func = import_rules
+    TesterClass = Tester
+    RulesClass = Rules
 # }}}
 
 
