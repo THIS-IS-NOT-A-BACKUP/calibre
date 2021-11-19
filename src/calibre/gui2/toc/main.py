@@ -330,7 +330,7 @@ class ItemView(QStackedWidget):  # {{{
 
     def create_from_user_xpath(self):
         d = XPathDialog(self, self.prefs)
-        if d.exec_() == QDialog.DialogCode.Accepted and d.xpaths:
+        if d.exec() == QDialog.DialogCode.Accepted and d.xpaths:
             self.create_from_xpath.emit(d.xpaths, d.remove_duplicates_cb.isChecked())
 
     def hide_azw3_warning(self):
@@ -693,7 +693,7 @@ class TreeWidget(QTreeWidget):  # {{{
             case_menu.addAction(_('Capitalize'), self.capitalize)
             m.addMenu(case_menu)
 
-            m.exec_(QCursor.pos())
+            m.exec(QCursor.pos())
 # }}}
 
 
@@ -1034,7 +1034,7 @@ class TOCEditor(QDialog):  # {{{
         self.explode_done.connect(self.read_toc, type=Qt.ConnectionType.QueuedConnection)
         self.writing_done.connect(self.really_accept, type=Qt.ConnectionType.QueuedConnection)
 
-        r = QApplication.desktop().availableGeometry(self)
+        r = self.screen().availableSize()
         self.resize(r.width() - 100, r.height() - 100)
         geom = self.prefs.get('toc_editor_window_geom', None)
         if geom is not None:
@@ -1163,7 +1163,7 @@ def main(path=None, title=None):
     d = TOCEditor(path, title=title, write_result_to=path + '.result')
     d.start()
     ret = 1
-    if d.exec_() == QDialog.DialogCode.Accepted:
+    if d.exec() == QDialog.DialogCode.Accepted:
         ret = 0
     del d
     del app

@@ -9,15 +9,15 @@ import signal
 import sys
 import threading
 from contextlib import contextmanager
-from threading import Lock, RLock
-
 from qt.core import (
-    QT_VERSION, QApplication, QBuffer, QByteArray, QCoreApplication, QDateTime,
-    QDesktopServices, QDialog, QEvent, QFileDialog, QFileIconProvider, QFileInfo, QPalette,
-    QFont, QFontDatabase, QFontInfo, QFontMetrics, QIcon, QLocale, QColor,
-    QNetworkProxyFactory, QObject, QSettings, QSocketNotifier, QStringListModel, Qt,
-    QThread, QTimer, QTranslator, QUrl, pyqtSignal, QIODevice, QDialogButtonBox, QStyle
+    QT_VERSION, QApplication, QBuffer, QByteArray, QColor, QCoreApplication,
+    QDateTime, QDesktopServices, QDialog, QDialogButtonBox, QEvent, QFileDialog,
+    QFileIconProvider, QFileInfo, QFont, QFontDatabase, QFontInfo, QFontMetrics,
+    QGuiApplication, QIcon, QIODevice, QLocale, QNetworkProxyFactory, QObject,
+    QPalette, QSettings, QSocketNotifier, QStringListModel, QStyle, Qt, QThread,
+    QTimer, QTranslator, QUrl, pyqtSignal
 )
+from threading import Lock, RLock
 
 from calibre import as_unicode, prints
 from calibre.constants import (
@@ -331,13 +331,15 @@ def default_author_link():
 
 
 def available_heights():
-    desktop  = QCoreApplication.instance().desktop()
-    return list(map(lambda x: x.height(), map(desktop.availableGeometry, range(desktop.screenCount()))))
+    return tuple(s.availableSize().height() for s in QGuiApplication.screens())
 
 
 def available_height():
-    desktop  = QCoreApplication.instance().desktop()
-    return desktop.availableGeometry().height()
+    return QApplication.instance().primaryScreen().availableSize().height()
+
+
+def available_width():
+    return QApplication.instance().primaryScreen().availableSize().width()
 
 
 def max_available_height():
@@ -346,11 +348,6 @@ def max_available_height():
 
 def min_available_height():
     return min(available_heights())
-
-
-def available_width():
-    desktop       = QCoreApplication.instance().desktop()
-    return desktop.availableGeometry().width()
 
 
 def get_screen_dpi():
@@ -382,7 +379,7 @@ def warning_dialog(parent, title, msg, det_msg='', show=False,
         )+ ' ' + title, msg, det_msg, parent=parent,
         show_copy_button=show_copy_button)
     if show:
-        return d.exec_()
+        return d.exec()
     return d
 
 
@@ -393,7 +390,7 @@ def error_dialog(parent, title, msg, det_msg='', show=False,
         ) + ' ' + title, msg, det_msg, parent=parent,
         show_copy_button=show_copy_button)
     if show:
-        return d.exec_()
+        return d.exec()
     return d
 
 
@@ -441,7 +438,7 @@ def question_dialog(parent, title, msg, det_msg='', show_copy_button=False,
         tc.setChecked(bool(skip_dialog_skip_precheck))
         d.resize_needed.emit()
 
-    ret = d.exec_() == QDialog.DialogCode.Accepted
+    ret = d.exec() == QDialog.DialogCode.Accepted
     if add_abort_button and d.aborted:
         raise Aborted()
 
@@ -459,7 +456,7 @@ def info_dialog(parent, title, msg, det_msg='', show=False,
                     show_copy_button=show_copy_button, only_copy_details=only_copy_details)
 
     if show:
-        return d.exec_()
+        return d.exec()
     return d
 
 
@@ -474,7 +471,7 @@ def show_restart_warning(msg, parent=None):
         d.do_restart = True
     b.clicked.connect(rf)
     d.set_details('')
-    d.exec_()
+    d.exec()
     b.clicked.disconnect()
     return d.do_restart
 
@@ -678,12 +675,16 @@ if not iswindows and not ismacos and 'CALIBRE_NO_NATIVE_FILEDIALOGS' not in os.e
     has_linux_file_dialog_helper = check_for_linux_native_dialogs()
 
 if has_windows_file_dialog_helper:
-    from calibre.gui2.win_file_dialogs import choose_files, choose_images, choose_dir, choose_save_file
+    from calibre.gui2.win_file_dialogs import (
+        choose_dir, choose_files, choose_images, choose_save_file
+    )
 elif has_linux_file_dialog_helper:
     choose_dir, choose_files, choose_save_file, choose_images = map(
         linux_native_dialog, 'dir files save_file images'.split())
 else:
-    from calibre.gui2.qt_file_dialogs import choose_files, choose_images, choose_dir, choose_save_file
+    from calibre.gui2.qt_file_dialogs import (
+        choose_dir, choose_files, choose_images, choose_save_file
+    )
     choose_files, choose_images, choose_dir, choose_save_file
 
 
@@ -1042,6 +1043,7 @@ class Application(QApplication):
     def load_builtin_fonts(self, scan_for_fonts=False):
         if scan_for_fonts:
             from calibre.utils.fonts.scanner import font_scanner
+
             # Start scanning the users computer for fonts
             font_scanner
 
@@ -1144,13 +1146,13 @@ class Application(QApplication):
                 # if not os.path.exists(p): raise ValueError(p)
                 pcache[v] = p
             v = pcache[v]
-            icon_map[getattr(QStyle, 'SP_'+k)] = v
+            icon_map[getattr(QStyle.StandardPixmap, 'SP_'+k)] = v
         transient_scroller = 0
         if ismacos:
             from calibre_extensions.cocoa import transient_scroller
             transient_scroller = transient_scroller()
-        icon_map[QStyle.StandardPixmap.SP_CustomBase + 1] = I('close-for-light-theme.png')
-        icon_map[QStyle.StandardPixmap.SP_CustomBase + 2] = I('close-for-dark-theme.png')
+        icon_map[(QStyle.StandardPixmap.SP_CustomBase & 0xf0000000) + 1] = I('close-for-light-theme.png')
+        icon_map[(QStyle.StandardPixmap.SP_CustomBase & 0xf0000000) + 2] = I('close-for-dark-theme.png')
         self.pi.load_style(icon_map, transient_scroller)
 
     def _send_file_open_events(self):
@@ -1332,6 +1334,7 @@ def ensure_app(headless=True):
             if headless and has_headless:
                 _store_app.headless = True
             import traceback
+
             # This is needed because as of PyQt 5.4 if sys.execpthook ==
             # sys.__excepthook__ PyQt will abort the application on an
             # unhandled python exception in a slot or virtual method. Since ensure_app()
@@ -1399,7 +1402,7 @@ def elided_text(text, font=None, width=300, pos='middle'):
     rendered, replacing characters from the left, middle or right (as per pos)
     of the string with an ellipsis. Results in a string much closer to the
     limit than Qt's elidedText().'''
-    from qt.core import QFontMetrics, QApplication
+    from qt.core import QApplication, QFontMetrics
     if font is None:
         font = QApplication.instance().font()
     fm = (font if isinstance(font, QFontMetrics) else QFontMetrics(font))
@@ -1434,6 +1437,7 @@ def form_to_compiled_form(form):
 def build_forms(srcdir, info=None, summary=False, check_for_migration=False):
     import re
     from PyQt5.uic import compileUi
+
     from polyglot.io import PolyglotStringIO
     forms = find_forms(srcdir)
     if info is None:
@@ -1495,8 +1499,7 @@ empty_index = empty_model.index(0)
 
 def set_app_uid(val):
     import ctypes
-    from ctypes import wintypes
-    from ctypes import HRESULT
+    from ctypes import HRESULT, wintypes
     try:
         AppUserModelID = ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID
     except Exception:  # Vista has no app uids
