@@ -12,7 +12,7 @@ from hashlib import sha256
 from qt.core import (
     QApplication, QCursor, QDockWidget, QEvent, QMainWindow, QMenu, QMimeData,
     QModelIndex, QPixmap, Qt, QTimer, QToolBar, QUrl, QVBoxLayout, QWidget,
-    pyqtSignal
+    pyqtSignal, sip
 )
 from threading import Thread
 
@@ -178,7 +178,7 @@ class EbookViewer(MainWindow):
         self.web_view.quit.connect(self.quit)
         self.web_view.update_current_toc_nodes.connect(self.toc.update_current_toc_nodes)
         self.web_view.toggle_full_screen.connect(self.toggle_full_screen)
-        self.web_view.ask_for_open.connect(self.ask_for_open, type=Qt.ConnectionType.QueuedConnection)
+        self.web_view.ask_for_open.connect(self.ask_for_open_from_js, type=Qt.ConnectionType.QueuedConnection)
         self.web_view.selection_changed.connect(self.lookup_widget.selected_text_changed, type=Qt.ConnectionType.QueuedConnection)
         self.web_view.selection_changed.connect(self.highlights_widget.selected_text_changed, type=Qt.ConnectionType.QueuedConnection)
         self.web_view.view_image.connect(self.view_image, type=Qt.ConnectionType.QueuedConnection)
@@ -452,6 +452,14 @@ class EbookViewer(MainWindow):
             self.removeToolBar(toolbar)
             self.addToolBar(Qt.ToolBarArea.LeftToolBarArea, toolbar)
 
+    def ask_for_open_from_js(self, path):
+        if path and not os.path.exists(path):
+            self.web_view.remove_recently_opened(path)
+            error_dialog(self, _('Book does not exist'), _(
+                'Cannot open {} as it no longer exists').format(path), show=True)
+        else:
+            self.ask_for_open(path)
+
     def ask_for_open(self, path=None):
         if path is None:
             files = choose_files(
@@ -495,13 +503,16 @@ class EbookViewer(MainWindow):
         try:
             ans = prepare_book(pathtoebook, force=reload_book, prepare_notify=self.prepare_notify)
         except WorkerError as e:
-            self.book_prepared.emit(False, {'exception': e, 'tb': e.orig_tb, 'pathtoebook': pathtoebook})
+            if not sip.isdeleted(self):
+                self.book_prepared.emit(False, {'exception': e, 'tb': e.orig_tb, 'pathtoebook': pathtoebook})
         except Exception as e:
             import traceback
-            self.book_prepared.emit(False, {'exception': e, 'tb': traceback.format_exc(), 'pathtoebook': pathtoebook})
+            if not sip.isdeleted(self):
+                self.book_prepared.emit(False, {'exception': e, 'tb': traceback.format_exc(), 'pathtoebook': pathtoebook})
         else:
             performance_monitor('prepared emitted')
-            self.book_prepared.emit(True, {'base': ans, 'pathtoebook': pathtoebook, 'open_at': open_at, 'reloaded': reload_book})
+            if not sip.isdeleted(self):
+                self.book_prepared.emit(True, {'base': ans, 'pathtoebook': pathtoebook, 'open_at': open_at, 'reloaded': reload_book})
 
     def prepare_notify(self):
         self.book_preparation_started.emit()
