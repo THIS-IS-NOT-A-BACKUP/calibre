@@ -1,7 +1,7 @@
 __license__ = 'GPL v3'
 __copyright__ = '2022, Howard Cornett howard at myreadinglife.com>'
 '''
-https://skepticalinquirer.org/
+www.secularhumanism.org
 '''
 
 from calibre.web.feeds.news import BasicNewsRecipe
@@ -14,9 +14,9 @@ def classes(classes):
 
 
 class FreeInquiry(BasicNewsRecipe):
-    title = 'The Skeptical Inquirer'
+    title = 'Free Inquiry'
     __author__ = 'Howard Cornett'
-    description = 'The Magazine for Science and Reason'
+    description = ("America's Bimonthly Journal of Humanist Ideas")
     publisher = 'Center for Inquiry'
     no_stylesheets = True
     encoding = 'utf-8'
@@ -44,7 +44,7 @@ class FreeInquiry(BasicNewsRecipe):
     def get_browser(self):
         br = BasicNewsRecipe.get_browser(self)
         if self.username is not None and self.password is not None:
-            br.open('https://skepticalinquirer.org/member-login/')
+            br.open('https://secularhumanism.org/member-login/')
             br.select_form(name='loginform')
             br['log'] = self.username
             br['pwd'] = self.password
@@ -83,7 +83,7 @@ class FreeInquiry(BasicNewsRecipe):
                             }
 
     def parse_index(self):
-        baseurl = 'https://skepticalinquirer.org/latest/'
+        baseurl = 'https://secularhumanism.org/latest/'
         articles = []
         seen = set()
         articles.extend(self.parse_free_inquiry_index_page(baseurl,seen))
