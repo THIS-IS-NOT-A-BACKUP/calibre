@@ -12,19 +12,19 @@ from calibre.utils.config_base import tweaks, prefs
 from calibre_extensions import icu as _icu
 from polyglot.builtins import cmp
 
-_locale = _collator = _primary_collator = _sort_collator = _non_numeric_sort_collator = _numeric_collator = _case_sensitive_collator = None
+_locale = _collator = _primary_collator = _sort_collator = _non_numeric_sort_collator = _numeric_collator = None
+_case_sensitive_collator = _primary_no_punc_collator = None
 cmp
 
 _none = ''
 _none2 = b''
 _cmap = {}
 
-icu_unicode_version = getattr(_icu, 'unicode_version', None)
+icu_unicode_version = _icu.unicode_version
 _nmodes = {m:getattr(_icu, m) for m in ('NFC', 'NFD', 'NFKC', 'NFKD')}
 
+
 # Ensure that the python internal filesystem and default encodings are not ASCII
-
-
 def is_ascii(name):
     try:
         return codecs.lookup(name).name == b'ascii'
@@ -67,7 +67,9 @@ def collator():
 
 def change_locale(locale=None):
     global _locale, _collator, _primary_collator, _sort_collator, _numeric_collator, _case_sensitive_collator, _non_numeric_sort_collator
+    global _primary_no_punc_collator
     _collator = _primary_collator = _sort_collator = _numeric_collator = _case_sensitive_collator = _non_numeric_sort_collator = None
+    _primary_no_punc_collator = None
     _locale = locale
 
 
@@ -78,6 +80,19 @@ def primary_collator():
         _primary_collator = collator().clone()
         _primary_collator.strength = _icu.UCOL_PRIMARY
     return _primary_collator
+
+
+def primary_collator_without_punctuation():
+    'Ignores case differences, accented characters and punctuation'
+    global _primary_no_punc_collator
+    if _primary_no_punc_collator is None:
+        _primary_no_punc_collator = collator().clone()
+        _primary_no_punc_collator.strength = _icu.UCOL_PRIMARY
+        try:
+            _primary_no_punc_collator.set_attribute(_icu.UCOL_ALTERNATE_HANDLING, _icu.UCOL_SHIFTED)
+        except AttributeError:
+            pass  # people running from source without latest binary
+    return _primary_no_punc_collator
 
 
 def sort_collator():
@@ -224,8 +239,10 @@ except AttributeError:  # For people running from source
 
 find = make_two_arg_func(collator, 'find')
 primary_find = make_two_arg_func(primary_collator, 'find')
+primary_no_punc_find = make_two_arg_func(primary_collator_without_punctuation, 'find')
 contains = make_two_arg_func(collator, 'contains')
 primary_contains = make_two_arg_func(primary_collator, 'contains')
+primary_no_punc_contains = make_two_arg_func(primary_collator_without_punctuation, 'contains')
 startswith = make_two_arg_func(collator, 'startswith')
 primary_startswith = make_two_arg_func(primary_collator, 'startswith')
 safe_chr = _icu.chr
@@ -293,8 +310,33 @@ string_length = len
 # Return the number of UTF-16 codepoints in a string
 utf16_length = _icu.utf16_length
 
-################################################################################
 
+def remove_accents_icu(txt: str) -> str:
+    t = getattr(remove_accents_icu, 'transliterator', None)
+    if t is None:
+        t = _icu.Transliterator('remove_accents', '''\
+:: NFD (NFC);
+:: [:Nonspacing Mark:] Remove;
+:: NFC (NFD);
+''')
+        setattr(remove_accents_icu, 'transliterator', t)
+    return t.transliterate(txt)
+
+
+def remove_accents_regex(txt: str) -> str:
+    pat = getattr(remove_accents_regex, 'pat', None)
+    if pat is None:
+        import regex, unicodedata
+        pat = regex.compile(r'\p{Mn}', flags=regex.UNICODE)
+        setattr(remove_accents_regex, 'pat', pat)
+        setattr(remove_accents_regex, 'normalize', unicodedata.normalize)
+    normalize = remove_accents_regex.normalize
+    return normalize('NFKC', pat.sub('', normalize('NFKD', txt)))
+
+
+remove_accents = remove_accents_regex  # more robust and faster
+
+################################################################################
 if __name__ == '__main__':
     from calibre.utils.icu_test import run
     run(verbosity=4)
