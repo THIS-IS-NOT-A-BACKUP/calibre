@@ -123,6 +123,11 @@ class TestICU(unittest.TestCase):
         a = lambda p,l : m.append((p, l))
         icu.primary_collator_without_punctuation().find_all('a', 'a a🐱a', a)
         self.ae(m, [(0, 1), (2, 1), (5, 1)])
+        # test find whole words
+        c = icu.primary_collator_without_punctuation()
+        self.ae(c.find('a', 'abc a bc'), (0, 1))
+        self.ae(c.find('a', 'abc a bc', True), (4, 1))
+        self.ae(c.find('pena', 'a peñaabc peña', True), (10, 4))
 
     def test_collation_order(self):
         'Testing collation ordering'
