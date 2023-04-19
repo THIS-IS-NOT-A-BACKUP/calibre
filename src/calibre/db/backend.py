@@ -42,7 +42,7 @@ from calibre.utils.date import EPOCH, parse_date, utcfromtimestamp, utcnow
 from calibre.utils.filenames import (
     WindowsAtomicFolderMove, ascii_filename, atomic_rename, copyfile_using_links,
     copytree_using_links, hardlink_file, is_case_sensitive, is_fat_filesystem,
-    remove_dir_if_empty, samefile,
+    make_long_path_useable, remove_dir_if_empty, samefile,
 )
 from calibre.utils.formatter_functions import (
     compile_user_template_functions, formatter_functions, load_user_template_functions,
@@ -1889,7 +1889,16 @@ class DB:
             os.makedirs(tpath)
         update_paths_in_db()
 
-    def iter_extra_files(self, book_id, book_path, formats_field, yield_paths=False):
+    def copy_extra_file_to(self, book_id, book_path, relpath, stream_or_path):
+        full_book_path = os.path.abspath(os.path.join(self.library_path, book_path))
+        src_path = make_long_path_useable(os.path.join(full_book_path, relpath))
+        if isinstance(stream_or_path, str):
+            shutil.copy2(src_path, make_long_path_useable(stream_or_path))
+        else:
+            with open(src_path, 'rb') as src:
+                shutil.copyfileobj(src, stream_or_path)
+
+    def iter_extra_files(self, book_id, book_path, formats_field, yield_paths=False, pattern=''):
         known_files = {COVER_FILE_NAME, METADATA_FILE_NAME}
         for fmt in formats_field.for_book(book_id, default_value=()):
             fname = formats_field.format_fname(book_id, fmt)
@@ -1897,28 +1906,40 @@ class DB:
             if fpath:
                 known_files.add(os.path.basename(fpath))
         full_book_path = os.path.abspath(os.path.join(self.library_path, book_path))
-        for dirpath, dirnames, filenames in os.walk(full_book_path):
-            for fname in filenames:
-                path = os.path.join(dirpath, fname)
-                if os.access(path, os.R_OK):
-                    relpath = os.path.relpath(path, full_book_path)
-                    relpath = relpath.replace(os.sep, '/')
-                    if relpath not in known_files:
-                        mtime = os.path.getmtime(path)
-                        if yield_paths:
-                            yield relpath, path, mtime
-                        else:
-                            try:
-                                src = open(path, 'rb')
-                            except OSError:
-                                if iswindows:
-                                    time.sleep(1)
-                                src = open(path, 'rb')
-                            with src:
-                                yield relpath, src, mtime
+        if pattern:
+            from pathlib import Path
+            def iterator():
+                p = Path(full_book_path)
+                for x in p.glob(pattern):
+                    yield str(x)
+        else:
+            def iterator():
+                for dirpath, dirnames, filenames in os.walk(full_book_path):
+                    for fname in filenames:
+                        path = os.path.join(dirpath, fname)
+                        yield path
+        for path in iterator():
+            if os.access(path, os.R_OK):
+                relpath = os.path.relpath(path, full_book_path)
+                relpath = relpath.replace(os.sep, '/')
+                if relpath not in known_files:
+                    mtime = os.path.getmtime(path)
+                    if yield_paths:
+                        yield relpath, path, mtime
+                    else:
+                        try:
+                            src = open(path, 'rb')
+                        except OSError:
+                            if iswindows:
+                                time.sleep(1)
+                            src = open(path, 'rb')
+                        with src:
+                            yield relpath, src, mtime
 
-    def add_extra_file(self, relpath, stream, book_path):
+    def add_extra_file(self, relpath, stream, book_path, replace=True):
         dest = os.path.abspath(os.path.join(self.library_path, book_path, relpath))
+        if not replace and os.path.exists(dest):
+            return False
         if isinstance(stream, str):
             try:
                 shutil.copy2(stream, dest)
@@ -1933,6 +1954,7 @@ class DB:
                 d = open(dest, 'wb')
             with d:
                 shutil.copyfileobj(stream, d)
+        return True
 
     def write_backup(self, path, raw):
         path = os.path.abspath(os.path.join(self.library_path, path, METADATA_FILE_NAME))
