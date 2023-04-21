@@ -5,6 +5,7 @@
 import os
 import re
 from collections import namedtuple
+from contextlib import suppress
 from functools import lru_cache, partial
 from qt.core import (
     QAction, QApplication, QClipboard, QColor, QDialog, QEasingCurve, QIcon,
@@ -474,6 +475,13 @@ def create_copy_links(menu, data=None):
     menu.addSeparator()
     link(_('Link to show book in calibre'), f'calibre://show-book/{library_id}/{book_id}')
     link(_('Link to show book details in a popup window'), f'calibre://book-details/{library_id}/{book_id}')
+    mi = db.new_api.get_proxy_metadata(book_id)
+    data_path = os.path.join(db.backend.library_path, mi.path, 'data')
+    with suppress(OSError):
+        if os.listdir(data_path):
+            if iswindows:
+                data_path = '/' + data_path.replace('\\', '/')
+            link(_("Link to open book's data files folder"), 'file://' + data_path)
     if data:
         field = data.get('field')
         if data['type'] == 'author':
@@ -490,7 +498,6 @@ def create_copy_links(menu, data=None):
 
     if all_links:
         menu.addSeparator()
-        mi = db.new_api.get_proxy_metadata(book_id)
         all_links.insert(0, '')
         all_links.insert(0, mi.get('title') + ' - ' + ' & '.join(mi.get('authors')))
         link(_('Copy all the above links'), '\n'.join(all_links))
@@ -1088,6 +1095,7 @@ class BookDetails(DetailsLayout):  # {{{
 
     show_book_info = pyqtSignal()
     open_containing_folder = pyqtSignal(int)
+    open_data_folder = pyqtSignal(int)
     view_specific_format = pyqtSignal(int, object)
     search_requested = pyqtSignal(object, object)
     remove_specific_format = pyqtSignal(int, object)
@@ -1237,6 +1245,8 @@ class BookDetails(DetailsLayout):  # {{{
                     browse(data['url'])
             elif dt == 'path':
                 self.open_containing_folder.emit(int(data['loc']))
+            elif dt == 'data-path':
+                self.open_data_folder.emit(int(data['loc']))
             elif dt == 'devpath':
                 self.view_device_book.emit(data['loc'])
         else:

@@ -1984,6 +1984,12 @@ class DB:
     def trash_dir(self):
         return os.path.abspath(os.path.join(self.library_path, TRASH_DIR_NAME))
 
+    def clear_trash_dir(self):
+        tdir = self.trash_dir
+        if os.path.exists(tdir):
+            self.rmtree(tdir)
+            self.ensure_trash_dir()
+
     def ensure_trash_dir(self):
         tdir = self.trash_dir
         os.makedirs(os.path.join(tdir, 'b'), exist_ok=True)
@@ -2086,9 +2092,12 @@ class DB:
                 try:
                     book_id = int(x.name)
                     mtime = x.stat(follow_symlinks=False).st_mtime
+                    with open(make_long_path_useable(os.path.join(x.path, METADATA_FILE_NAME)), 'rb') as opf_stream:
+                        opf = OPF(opf_stream, basedir=x.path)
                 except Exception:
+                    import traceback
+                    traceback.print_exc()
                     continue
-                opf = OPF(os.path.join(x.path, METADATA_FILE_NAME), basedir=x.path)
                 books.append(TrashEntry(book_id, opf.title or unknown, (opf.authors or au)[0], os.path.join(x.path, COVER_FILE_NAME), mtime))
         base = os.path.join(self.trash_dir, 'f')
         um = {'title': unknown, 'authors': au}
@@ -2104,8 +2113,13 @@ class DB:
                 for f in os.scandir(x.path):
                     if f.is_file(follow_symlinks=False):
                         if f.name == 'metadata.json':
-                            with open(f.path, 'rb') as mf:
-                                metadata = json.loads(mf.read())
+                            try:
+                                with open(f.path, 'rb') as mf:
+                                    metadata = json.loads(mf.read())
+                            except Exception:
+                                import traceback
+                                traceback.print_exc()
+                                continue
                         else:
                             formats.add(f.name.upper())
                 if formats:
