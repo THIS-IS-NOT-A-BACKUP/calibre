@@ -5,31 +5,35 @@ __license__   = 'GPL v3'
 __copyright__ = '2010, Kovid Goyal <kovid@kovidgoyal.net>'
 __docformat__ = 'restructuredtext en'
 
-import itertools, operator
-from functools import partial
+import itertools
+import operator
 from collections import OrderedDict
-
+from functools import partial
 from qt.core import (
-    QTableView, Qt, QAbstractItemView, QMenu, pyqtSignal, QFont, QModelIndex,
-    QIcon, QItemSelection, QMimeData, QDrag, QStyle, QPoint, QUrl, QHeaderView, QEvent,
-    QStyleOptionHeader, QItemSelectionModel, QSize, QFontMetrics,
-    QDialog, QGridLayout, QPushButton, QDialogButtonBox, QLabel, QSpinBox)
+    QAbstractItemView, QDialog, QDialogButtonBox, QDrag, QEvent, QFont, QFontMetrics,
+    QGridLayout, QHeaderView, QIcon, QItemSelection, QItemSelectionModel, QLabel, QMenu,
+    QMimeData, QModelIndex, QPoint, QPushButton, QSize, QSpinBox, QStyle,
+    QStyleOptionHeader, Qt, QTableView, QUrl, pyqtSignal,
+)
 
-from calibre.constants import islinux
+from calibre import force_unicode
+from calibre.constants import filesystem_encoding, islinux
+from calibre.gui2 import FunctionDispatcher, error_dialog, gprefs
 from calibre.gui2.dialogs.enum_values_edit import EnumValuesEdit
-from calibre.gui2.library.delegates import (RatingDelegate, PubDateDelegate,
-    TextDelegate, DateDelegate, CompleteDelegate, CcTextDelegate, CcLongTextDelegate,
-    CcBoolDelegate, CcCommentsDelegate, CcDateDelegate, CcTemplateDelegate,
-    CcEnumDelegate, CcNumberDelegate, LanguagesDelegate, SeriesDelegate, CcSeriesDelegate)
+from calibre.gui2.gestures import GestureManager
+from calibre.gui2.library import DEFAULT_SORT
+from calibre.gui2.library.alternate_views import (
+    AlternateViews, handle_enter_press, setup_dnd_interface,
+)
+from calibre.gui2.library.delegates import (
+    CcBoolDelegate, CcCommentsDelegate, CcDateDelegate, CcEnumDelegate,
+    CcLongTextDelegate, CcNumberDelegate, CcSeriesDelegate, CcTemplateDelegate,
+    CcTextDelegate, CompleteDelegate, DateDelegate, LanguagesDelegate, PubDateDelegate,
+    RatingDelegate, SeriesDelegate, TextDelegate,
+)
 from calibre.gui2.library.models import BooksModel, DeviceBooksModel
 from calibre.gui2.pin_columns import PinTableView
-from calibre.gui2.library.alternate_views import AlternateViews, setup_dnd_interface, handle_enter_press
-from calibre.gui2.gestures import GestureManager
-from calibre.utils.config import tweaks, prefs
-from calibre.gui2 import error_dialog, gprefs, FunctionDispatcher
-from calibre.gui2.library import DEFAULT_SORT
-from calibre.constants import filesystem_encoding
-from calibre import force_unicode
+from calibre.utils.config import prefs, tweaks
 from calibre.utils.icu import primary_sort_key
 from polyglot.builtins import iteritems
 
@@ -1282,12 +1286,27 @@ class BooksView(QTableView):  # {{{
             self.column_header.update()
 
     def scroll_to_row(self, row):
+        row = min(row, self.model().rowCount(QModelIndex())-1)
         if row > -1:
-            h = self.horizontalHeader()
-            for i in range(h.count()):
-                if not h.isSectionHidden(i) and h.sectionViewportPosition(i) >= 0:
-                    self.scrollTo(self.model().index(row, i), QAbstractItemView.ScrollHint.PositionAtCenter)
-                    break
+            # taken from Qt implementation of scrollTo but this ensured horizontal position is not affected
+            vh = self.verticalHeader()
+            viewport_height = self.viewport().height()
+            vertical_offset = vh.offset()
+            vertical_position = vh.sectionPosition(row)
+            cell_height = vh.sectionSize(row)
+
+            pos = 'center'
+            if vertical_position - vertical_offset < 0 or cell_height > viewport_height:
+                pos = 'top'
+            elif vertical_position - vertical_offset + cell_height > viewport_height:
+                pos = 'bottom'
+            vsb = self.verticalScrollBar()
+            if pos == 'top':
+                vsb.setValue(vertical_position)
+            elif pos == 'bottom':
+                vsb.setValue(vertical_position - viewport_height + cell_height)
+            else:
+                vsb.setValue(vertical_position - ((viewport_height - cell_height) // 2))
 
     @property
     def current_book(self):
@@ -1318,6 +1337,7 @@ class BooksView(QTableView):  # {{{
             row = self.model().db.data.id_to_index(book_id)
         if row > -1 and row < self.model().rowCount(QModelIndex()):
             h = self.horizontalHeader()
+            hpos = self.horizontalScrollBar().value()
             logical_indices = list(range(h.count()))
             logical_indices = [x for x in logical_indices if not
                     h.isSectionHidden(x)]
@@ -1328,6 +1348,9 @@ class BooksView(QTableView):  # {{{
             pairs.sort(key=lambda x: x[1])
             i = pairs[0][0]
             index = self.model().index(row, i)
+            ci = self.currentIndex()
+            if ci.isValid():
+                index = self.model().index(row, ci.column())
             if for_sync:
                 sm = self.selectionModel()
                 sm.setCurrentIndex(index, QItemSelectionModel.SelectionFlag.NoUpdate)
@@ -1336,6 +1359,7 @@ class BooksView(QTableView):  # {{{
                 if select:
                     sm = self.selectionModel()
                     sm.select(index, QItemSelectionModel.SelectionFlag.ClearAndSelect|QItemSelectionModel.SelectionFlag.Rows)
+            self.horizontalScrollBar().setValue(hpos)
 
     def select_cell(self, row_number=0, logical_column=0):
         if row_number > -1 and row_number < self.model().rowCount(QModelIndex()):
